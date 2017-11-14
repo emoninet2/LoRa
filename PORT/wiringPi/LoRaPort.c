@@ -5,6 +5,10 @@
  */
 
 #include "../LoRaPort.h"
+#include "../PortConfig.h"
+
+
+#if (LoRa_Port_wiringPi == 1)
 
 #include <wiringPi.h>
 #include <wiringPiSPI.h>
@@ -225,3 +229,5 @@ void SX127x_debug_if(bool condition, const char *format, ...){
         va_end(args);
     }
 }
+
+#endif
