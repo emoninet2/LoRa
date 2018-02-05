@@ -1,0 +1,268 @@
+/*
+ * To change this license header, choose License Headers in Project Properties.
+ * To change this template file, choose Tools | Templates
+ * and open the template in the editor.
+ */
+
+/* 
+ * File:   main.c
+ * Author: emon
+ *
+ * Created on September 26, 2017, 6:23 PM
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include <mqueue.h>
+
+
+#include "LoRa/PORT/LoRaPort.h"
+#include "LoRa/HAL/LoRaHal.h"
+#include "LoRa/SX127x/SX1272/SX1272.h"
+#include "LoRa/Radio/Radio.h"
+
+
+SX1272_t Radio;
+
+
+
+pthread_t thread1;
+pthread_t thread2;
+pthread_mutex_t RadioLock;
+
+
+void LoRaPortInit(LoRaPort_t * port){
+    port->SX127x_Port_Initialize = &SX127x_Port_Initialize;
+    port->GPIO_ConfigAndInit = SX127x_GPIO_ConfigAndInit;
+    port->GPIO_DeInit = &SX127x_GPIO_DeInit;
+    port->GPIO_GetValue = SX127x_GPIO_GetValue;
+    port->GPIO_Init = SX127x_GPIO_Init;
+    port->GPIO_SetValue =SX127x_GPIO_SetValue;
+    port->SPI_Init=SX127x_SPI_Init;
+    port->SPI_TranscieveBuffer=SX127x_SPI_TranscieveBuffer;
+    port->SPI_TranscieveByte=SX127x_SPI_TranscieveByte;
+    port->Timeout_SetTime=SX127x_Timeout_SetTime;
+    port->Timeout_init=SX127x_Timeout_init;
+    port->debug=SX127x_debug;
+    port->debug_if=SX127x_debug_if;
+    port->delayMs=SX127x_delayMs;
+    port->delayUs=SX127x_delayUs;
+
+    
+    
+
+    
+    
+}
+
+void RadioReset(SX1272_t *Radio){
+
+    Radio->Settings.Modem = MODEM_LORA;
+    
+    Radio->Settings.Frequency = 869525000;
+    Radio->Settings.Pa.PaSel = SX1272_PaSelect_PA_BOOST_pin;
+    Radio->Settings.Pa.OutputPower = 0x07;
+    Radio->Settings.Pa.LowPnTxPllOff = false;
+    Radio->Settings.Pa.Ramp = SX1272_PaRamp_40us;
+    Radio->Settings.Ocp.On = true;
+    Radio->Settings.Ocp.trim = 0x1B;
+    Radio->Settings.Lna.gain = SX1272_LnaGain_G1;
+    Radio->Settings.Lna.boostOn = SX1272_LnaBoost_BoostOn;
+    
+    Radio->Settings.DioMapping.dio0 = SX1272_DioMapping_1;
+    Radio->Settings.DioMapping.dio1 = SX1272_DioMapping_0;
+    Radio->Settings.DioMapping.dio2 = SX1272_DioMapping_0;
+    Radio->Settings.DioMapping.dio3 = SX1272_DioMapping_0;
+    Radio->Settings.DioMapping.dio4 = SX1272_DioMapping_0;
+    Radio->Settings.DioMapping.dio5 = SX1272_DioMapping_0;
+    
+    
+    
+    Radio->Settings.LoRaSettings.ModemBandwidth = LoRa_ModemBw_125kHz;
+    Radio-> Settings.LoRaSettings.ModemCodingRate = LoRa_ModemCodingRate_4Div5;
+    Radio->Settings.LoRaSettings.implicitHeaderModeOn = false;
+    Radio->Settings.LoRaSettings.RxPayloadCrcOn = false;
+    Radio->Settings.LoRaSettings.LowDataRateOptimize = false;
+    Radio->Settings.LoRaSettings.spreadingfactor = LoRa_ModemSpreadingFactor_7;
+    Radio->Settings.LoRaSettings.txContinuousMode = false;
+    Radio->Settings.LoRaSettings.AgcAutoOn = true;
+    
+
+    Radio->Settings.LoRaSettings.SymbTimeout = 0x64;
+    Radio->Settings.LoRaSettings.PreambleLength = 0x08;
+    Radio->Settings.LoRaSettings.PayloadLength = 0x01;
+    Radio->Settings.LoRaSettings.PayloadMaxLength =0xFF;
+    Radio->Settings.LoRaSettings.FreqHopPeriod =0x00;
+    Radio->Settings.LoRaSettings.InvertIqSignal = false;
+    Radio->Settings.LoRaSettings.SyncWord = 0x12;
+    
+    
+}
+
+
+
+
+typedef struct {
+    uint8_t data[256];
+    unsigned int len;
+    //sem_t Lock;
+}LoRaXData_t;
+
+LoRaXData_t LoRaTxData;
+LoRaXData_t LoRaRxData;
+
+void *radio_rx(void *ptr){
+    pthread_mutex_lock(&RadioLock);
+
+    SX127x_antSet(&Radio.Port,0);
+    PaRamp(&Radio,0,SX1272_PaRamp_40us);
+    LoRaWriteFifoAddrPtr(&Radio,0x00);
+    LoRaSymbTimeout(&Radio,0xFF);
+    LoRaWriteFifoAddrPtr(&Radio,0);
+    LoRaWriteFifoRxBaseAddr(&Radio,0x00);
+    //myRadio.LoRaPayloadLength(255);
+    LoRaMode(&Radio,LoRa_OpMode_RXContinuous);
+
+    pthread_mutex_unlock(&RadioLock);
+    
+    while(1){
+        
+        pthread_mutex_lock(&RadioLock);
+
+        if( LoRaIrqFlags(&Radio, LoRa_IrqFlags_RxDone)  ){
+            uint8_t data[255];
+            RxPacket_t rxPacket;
+            rxPacket.dataPtr = data;
+            ReadPacket(&Radio,&rxPacket);
+            
+            uint8_t len = rxPacket.size;
+            printf ("\e[1;32m");
+            int i;
+            for(i=0;i<len;i++){
+                    printf("%c",data[i]);
+            }
+            printf("\e[0m\r\n");
+            
+            
+            SX127x_antSet(&Radio.Port,0);
+
+            PaRamp(&Radio,0,SX1272_PaRamp_40us);
+            LoRaWriteFifoAddrPtr(&Radio,0x00);
+            LoRaSymbTimeout(&Radio,0xFF);
+            LoRaWriteFifoAddrPtr(&Radio,0);
+            LoRaWriteFifoRxBaseAddr(&Radio,0x00);
+            //myRadio.LoRaPayloadLength(255);
+            LoRaMode(&Radio,LoRa_OpMode_RXContinuous);
+            
+            
+        }
+
+        pthread_mutex_unlock(&RadioLock);
+
+    }
+}
+
+
+void *radio_tx(void *ptr){
+
+    
+    while(1){
+        char cmd[256];
+        char *cmdP = cmd;
+        while(1){
+            *cmdP = getc(stdin);
+            if(*cmdP == '\n') break;
+            cmdP++;
+        }
+        LoRaTxData.len = cmdP - cmd;
+        
+        SX127x_antSet(&Radio.Port,1);
+        TxPacket_t txPacket;
+        
+        txPacket.dataPtr = cmd;
+        txPacket.size = LoRaTxData.len;
+        
+        pthread_mutex_lock(&RadioLock);
+        SendPacket(&Radio, &txPacket);
+        
+        
+        SX127x_antSet(&Radio.Port,0);
+        PaRamp(&Radio,0,SX1272_PaRamp_40us);
+        LoRaWriteFifoAddrPtr(&Radio,0x00);
+        LoRaSymbTimeout(&Radio,0xFF);
+        LoRaWriteFifoAddrPtr(&Radio,0);
+        LoRaWriteFifoRxBaseAddr(&Radio,0x00);
+        //myRadio.LoRaPayloadLength(255);
+        LoRaMode(&Radio,LoRa_OpMode_RXContinuous);
+        
+        
+        
+        pthread_mutex_unlock(&RadioLock);
+        
+    }
+}
+
+/*
+ * 
+ */
+int main(int argc, char** argv) {
+    LoRaPortInit(&Radio.Port);
+    RadioReset(&Radio);
+    RadioInit(&Radio);
+    SX127x_GPIO_ConfigAndInit(SX127x_GPIO_DIO0, SX127x_GPIOMODE_INTERRUPT_IN, SX127x_GPIOPULL_NOPULL,SX127x_GPIO_INTERRUPT_RISING,InterrupDio0);
+    //SX127x_GPIO_ConfigAndInit(SX127x_GPIO_DIO1, SX127x_GPIOMODE_INTERRUPT_IN, SX127x_GPIOPULL_NOPULL,SX127x_GPIO_INTERRUPT_RISING,InterrupDio1);
+    //SX127x_GPIO_ConfigAndInit(SX127x_GPIO_DIO2, SX127x_GPIOMODE_INTERRUPT_IN, SX127x_GPIOPULL_NOPULL,SX127x_GPIO_INTERRUPT_RISING,InterrupDio2);
+    //SX127x_GPIO_ConfigAndInit(SX127x_GPIO_DIO3, SX127x_GPIOMODE_INTERRUPT_IN, SX127x_GPIOPULL_NOPULL,SX127x_GPIO_INTERRUPT_RISING,InterrupDio3);
+    //SX127x_GPIO_ConfigAndInit(SX127x_GPIO_DIO4, SX127x_GPIOMODE_INTERRUPT_IN, SX127x_GPIOPULL_NOPULL,SX127x_GPIO_INTERRUPT_RISING,InterrupDio4);
+    //SX127x_GPIO_ConfigAndInit(SX127x_GPIO_DIO5, SX127x_GPIOMODE_INTERRUPT_IN, SX127x_GPIOPULL_NOPULL,SX127x_GPIO_INTERRUPT_RISING,InterrupDio5);
+
+
+
+    printf("hello world\r\n");
+    
+
+    
+    int i;
+    for(i=1;i<10;i++){
+        printf("[%d] -> %#2x\r\n", i, ReadRegister(&Radio, REG_LORA, i) );
+        
+        
+    }
+    
+    pthread_mutex_init(&RadioLock, NULL);
+    
+    pthread_create(&thread1,NULL, radio_rx, (void*) NULL);
+    pthread_create(&thread2,NULL, radio_tx, (void*) NULL);
+    while(1);
+
+    return (EXIT_SUCCESS);
+}
+
+void InterrupDio0(void){
+    
+    dio0IrqHandler(&Radio);
+}
+
+void InterrupDio1(void){
+    
+    dio1IrqHandler(&Radio);
+}
+void InterrupDio2(void){
+    
+    dio2IrqHandler(&Radio);
+}
+void InterrupDio3(void){
+    
+    dio3IrqHandler(&Radio);
+}
+void InterrupDio4(void){
+    
+    dio4IrqHandler(&Radio);
+}
+void InterrupDio5(void){
+    
+    dio5IrqHandler(&Radio);
+}
